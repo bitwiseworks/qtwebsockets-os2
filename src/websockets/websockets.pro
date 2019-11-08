@@ -1,4 +1,5 @@
 TARGET = QtWebSockets
+TARGET_SHORT = QtWebS
 
 QT = core-private network
 
