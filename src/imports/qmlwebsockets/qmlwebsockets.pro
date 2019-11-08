@@ -1,5 +1,7 @@
 QT = websockets qml-private core-private
 
+TARGET_SHORT = webs
+
 TARGETPATH = QtWebSockets
 
 HEADERS +=  qmlwebsockets_plugin.h \
