@@ -84,9 +84,14 @@ QWebSocketDataProcessor::QWebSocketDataProcessor(QObject *parent) :
     m_textMessage(),
     m_payloadLength(0),
     m_pConverterState(nullptr),
-    m_pTextCodec(QTextCodec::codecForName("UTF-8"))
+    m_pTextCodec(QTextCodec::codecForName("UTF-8")),
+    m_waitTimer(new QTimer(this))
 {
     clear();
+    // initialize the internal timeout timer
+    m_waitTimer->setInterval(5000);
+    m_waitTimer->setSingleShot(true);
+    m_waitTimer->callOnTimeout(this, &QWebSocketDataProcessor::timeout);
 }
 
 /*!
@@ -99,6 +104,33 @@ QWebSocketDataProcessor::~QWebSocketDataProcessor()
         delete m_pConverterState;
         m_pConverterState = nullptr;
     }
+}
+
+void QWebSocketDataProcessor::setMaxAllowedFrameSize(quint64 maxAllowedFrameSize)
+{
+    frame.setMaxAllowedFrameSize(maxAllowedFrameSize);
+}
+
+quint64 QWebSocketDataProcessor::maxAllowedFrameSize() const
+{
+    return frame.maxAllowedFrameSize();
+}
+
+/*!
+    \internal
+ */
+void QWebSocketDataProcessor::setMaxAllowedMessageSize(quint64 maxAllowedMessageSize)
+{
+    if (maxAllowedMessageSize <= maxMessageSize())
+        m_maxAllowedMessageSize = maxAllowedMessageSize;
+}
+
+/*!
+    \internal
+ */
+quint64 QWebSocketDataProcessor::maxAllowedMessageSize() const
+{
+    return m_maxAllowedMessageSize;
 }
 
 /*!
@@ -114,19 +146,28 @@ quint64 QWebSocketDataProcessor::maxMessageSize()
  */
 quint64 QWebSocketDataProcessor::maxFrameSize()
 {
-    return MAX_FRAME_SIZE_IN_BYTES;
+   return QWebSocketFrame::maxFrameSize();
 }
 
 /*!
     \internal
+
+    Returns \c true if a complete websocket frame has been processed;
+    otherwise returns \c false.
  */
-void QWebSocketDataProcessor::process(QIODevice *pIoDevice)
+bool QWebSocketDataProcessor::process(QIODevice *pIoDevice)
 {
     bool isDone = false;
 
     while (!isDone) {
-        QWebSocketFrame frame = QWebSocketFrame::readFrame(pIoDevice);
-        if (Q_LIKELY(frame.isValid())) {
+        frame.readFrame(pIoDevice);
+        if (!frame.isDone()) {
+            // waiting for more data available
+            QObject::connect(pIoDevice, &QIODevice::readyRead,
+                             m_waitTimer, &QTimer::stop, Qt::UniqueConnection);
+            m_waitTimer->start();
+            return false;
+        } else if (Q_LIKELY(frame.isValid())) {
             if (frame.isControlFrame()) {
                 isDone = processControlFrame(frame);
             } else {
@@ -136,7 +177,7 @@ void QWebSocketDataProcessor::process(QIODevice *pIoDevice)
                     Q_EMIT errorEncountered(QWebSocketProtocol::CloseCodeProtocolError,
                                             tr("Received Continuation frame, while there is " \
                                                "nothing to continue."));
-                    return;
+                    return true;
                 }
                 if (Q_UNLIKELY(m_isFragmented && frame.isDataFrame() &&
                                !frame.isContinuationFrame())) {
@@ -144,7 +185,7 @@ void QWebSocketDataProcessor::process(QIODevice *pIoDevice)
                     Q_EMIT errorEncountered(QWebSocketProtocol::CloseCodeProtocolError,
                                             tr("All data frames after the initial data frame " \
                                                "must have opcode 0 (continuation)."));
-                    return;
+                    return true;
                 }
                 if (!frame.isContinuationFrame()) {
                     m_opCode = frame.opCode();
@@ -154,11 +195,11 @@ void QWebSocketDataProcessor::process(QIODevice *pIoDevice)
                         ? quint64(m_textMessage.length())
                         : quint64(m_binaryMessage.length());
                 if (Q_UNLIKELY((messageLength + quint64(frame.payload().length())) >
-                               MAX_MESSAGE_SIZE_IN_BYTES)) {
+                               maxAllowedMessageSize())) {
                     clear();
                     Q_EMIT errorEncountered(QWebSocketProtocol::CloseCodeTooMuchData,
                                             tr("Received message is too big."));
-                    return;
+                    return true;
                 }
 
                 if (m_opCode == QWebSocketProtocol::OpCodeText) {
@@ -171,7 +212,7 @@ void QWebSocketDataProcessor::process(QIODevice *pIoDevice)
                         clear();
                         Q_EMIT errorEncountered(QWebSocketProtocol::CloseCodeWrongDatatype,
                                                 tr("Invalid UTF-8 code encountered."));
-                        return;
+                        return true;
                     } else {
                         m_textMessage.append(frameTxt);
                         Q_EMIT textFrameReceived(frameTxt, frame.isFinalFrame());
@@ -199,7 +240,9 @@ void QWebSocketDataProcessor::process(QIODevice *pIoDevice)
             clear();
             isDone = true;
         }
+        frame.clear();
     }
+    return true;
 }
 
 /*!
@@ -299,6 +342,16 @@ bool QWebSocketDataProcessor::processControlFrame(const QWebSocketFrame &frame)
         break;
     }
     return mustStopProcessing;
+}
+
+/*!
+    \internal
+ */
+void QWebSocketDataProcessor::timeout()
+{
+    clear();
+    Q_EMIT errorEncountered(QWebSocketProtocol::CloseCodeGoingAway,
+                            tr("Timeout when reading data from socket."));
 }
 
 QT_END_NAMESPACE

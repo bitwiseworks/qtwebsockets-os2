@@ -55,6 +55,8 @@
 #include <QtCore/QByteArray>
 #include <QtCore/QString>
 #include <QtCore/QTextCodec>
+#include <QTimer>
+#include "qwebsocketframe_p.h"
 #include "qwebsocketprotocol.h"
 #include "qwebsocketprotocol_p.h"
 
@@ -62,6 +64,8 @@ QT_BEGIN_NAMESPACE
 
 class QIODevice;
 class QWebSocketFrame;
+
+const quint64 MAX_MESSAGE_SIZE_IN_BYTES = std::numeric_limits<int>::max() - 1;
 
 class Q_AUTOTEST_EXPORT QWebSocketDataProcessor : public QObject
 {
@@ -72,6 +76,10 @@ public:
     explicit QWebSocketDataProcessor(QObject *parent = nullptr);
     ~QWebSocketDataProcessor() override;
 
+    void setMaxAllowedFrameSize(quint64 maxAllowedFrameSize);
+    quint64 maxAllowedFrameSize() const;
+    void setMaxAllowedMessageSize(quint64 maxAllowedMessageSize);
+    quint64 maxAllowedMessageSize() const;
     static quint64 maxMessageSize();
     static quint64 maxFrameSize();
 
@@ -86,7 +94,7 @@ Q_SIGNALS:
     void errorEncountered(QWebSocketProtocol::CloseCode code, const QString &description);
 
 public Q_SLOTS:
-    void process(QIODevice *pIoDevice);
+    bool process(QIODevice *pIoDevice);
     void clear();
 
 private:
@@ -111,8 +119,12 @@ private:
     quint64 m_payloadLength;
     QTextCodec::ConverterState *m_pConverterState;
     QTextCodec *m_pTextCodec;
+    QWebSocketFrame frame;
+    QTimer *m_waitTimer;
+    quint64 m_maxAllowedMessageSize = MAX_MESSAGE_SIZE_IN_BYTES;
 
     bool processControlFrame(const QWebSocketFrame &frame);
+    void timeout();
 };
 
 QT_END_NAMESPACE

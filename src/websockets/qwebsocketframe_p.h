@@ -54,7 +54,7 @@
 #include <QtCore/QString>
 #include <QtCore/QByteArray>
 #include <QtCore/QCoreApplication>
-#include <limits.h>
+#include <limits>
 
 #include "qwebsockets_global.h"
 #include "qwebsocketprotocol.h"
@@ -64,25 +64,18 @@ QT_BEGIN_NAMESPACE
 
 class QIODevice;
 
-const quint64 MAX_FRAME_SIZE_IN_BYTES = INT_MAX - 1;
-const quint64 MAX_MESSAGE_SIZE_IN_BYTES = INT_MAX - 1;
+const quint64 MAX_FRAME_SIZE_IN_BYTES = std::numeric_limits<int>::max() - 1;
 
 class Q_AUTOTEST_EXPORT QWebSocketFrame
 {
     Q_DECLARE_TR_FUNCTIONS(QWebSocketFrame)
 
 public:
-    QWebSocketFrame();
-    QWebSocketFrame(const QWebSocketFrame &other);
+    QWebSocketFrame() = default;
 
-    QWebSocketFrame &operator =(const QWebSocketFrame &other);
-
-#ifdef Q_COMPILER_RVALUE_REFS
-    QWebSocketFrame(QWebSocketFrame &&other);
-    QWebSocketFrame &operator =(QWebSocketFrame &&other);
-#endif
-
-    void swap(QWebSocketFrame &other);
+    void setMaxAllowedFrameSize(quint64 maxAllowedFrameSize);
+    quint64 maxAllowedFrameSize() const;
+    static quint64 maxFrameSize();
 
     QWebSocketProtocol::CloseCode closeCode() const;
     QString closeReason() const;
@@ -101,33 +94,39 @@ public:
     void clear();
 
     bool isValid() const;
+    bool isDone() const;
 
-    static QWebSocketFrame readFrame(QIODevice *pIoDevice);
+    void readFrame(QIODevice *pIoDevice);
 
 private:
-    QWebSocketProtocol::CloseCode m_closeCode;
     QString m_closeReason;
-    quint32 m_mask;
-    QWebSocketProtocol::OpCode m_opCode;
-    quint8 m_length;
     QByteArray m_payload;
-
-    bool m_isFinalFrame;
-    bool m_rsv1;
-    bool m_rsv2;
-    bool m_rsv3;
-    bool m_isValid;
+    quint64 m_length = 0;
+    quint32 m_mask = 0;
+    QWebSocketProtocol::CloseCode m_closeCode = QWebSocketProtocol::CloseCodeNormal;
+    QWebSocketProtocol::OpCode m_opCode = QWebSocketProtocol::OpCodeReservedC;
 
     enum ProcessingState
     {
         PS_READ_HEADER,
         PS_READ_PAYLOAD_LENGTH,
-        PS_READ_BIG_PAYLOAD_LENGTH,
         PS_READ_MASK,
         PS_READ_PAYLOAD,
         PS_DISPATCH_RESULT,
         PS_WAIT_FOR_MORE_DATA
-    };
+    } m_processingState = PS_READ_HEADER;
+
+    bool m_isFinalFrame = true;
+    bool m_rsv1 = false;
+    bool m_rsv2 = false;
+    bool m_rsv3 = false;
+    bool m_isValid = false;
+    quint64 m_maxAllowedFrameSize = MAX_FRAME_SIZE_IN_BYTES;
+
+    ProcessingState readFrameHeader(QIODevice *pIoDevice);
+    ProcessingState readFramePayloadLength(QIODevice *pIoDevice);
+    ProcessingState readFrameMask(QIODevice *pIoDevice);
+    ProcessingState readFramePayload(QIODevice *pIoDevice);
 
     void setError(QWebSocketProtocol::CloseCode code, const QString &closeReason);
     bool checkValidity();
